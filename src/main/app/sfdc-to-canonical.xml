@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<mule xmlns:scripting="http://www.mulesoft.org/schema/mule/scripting" xmlns:sfdc="http://www.mulesoft.org/schema/mule/sfdc" xmlns:json="http://www.mulesoft.org/schema/mule/json" xmlns:data-mapper="http://www.mulesoft.org/schema/mule/ee/data-mapper" xmlns:context="http://www.springframework.org/schema/context"
+	xmlns:http="http://www.mulesoft.org/schema/mule/http" xmlns="http://www.mulesoft.org/schema/mule/core" xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+	xmlns:spring="http://www.springframework.org/schema/beans" version="EE-3.5.2"
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://www.springframework.org/schema/context http://www.springframework.org/schema/context/spring-context-current.xsd
+http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans-current.xsd
+http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+http://www.mulesoft.org/schema/mule/ee/data-mapper http://www.mulesoft.org/schema/mule/ee/data-mapper/current/mule-data-mapper.xsd
+http://www.mulesoft.org/schema/mule/json http://www.mulesoft.org/schema/mule/json/current/mule-json.xsd
+http://www.mulesoft.org/schema/mule/sfdc http://www.mulesoft.org/schema/mule/sfdc/current/mule-sfdc.xsd
+http://www.mulesoft.org/schema/mule/scripting http://www.mulesoft.org/schema/mule/scripting/current/mule-scripting.xsd">
+
+   <context:property-placeholder location="connectors.properties"/>
+    <data-mapper:config name="sfdcContact_to_canonical_Customercontact" transformationGraphPath="sfdccontact-to-canonical-customercontact.grf" doc:name="sfdcContact_to_canonical_Customercontact"/>
+    <sfdc:config name="SalesforceSandBox" username="${sfdc.user}" password="${sfdc.password}" securityToken="${sfdc.securityToken}" doc:name="Salesforce"/>
+    <sfdc:config name="SalesforceSungardTest" username="${sungard.sfdc.user}" password="${sungard.sfdc.password}" securityToken="${sungard.sfdc.securityToken}" doc:name="Salesforce"/>
+    
+    
+    <flow name="sfdc-api-email" doc:name="sfdc-api-email">
+        <http:inbound-endpoint exchange-pattern="request-response" host="localhost" port="8081" path="byEmail" doc:name="HTTP"/>
+        <set-variable doc:name="Set var email" value="'rose@edge.com'" variableName="email"/>
+        <flow-ref name="sfdc-to-canonical-flow" doc:name="Flow Reference"/>
+    </flow>
+        
+    <flow name="sfdc-api-companyName" doc:name="sfdc-api-companyName">
+        <http:inbound-endpoint exchange-pattern="request-response" host="localhost" port="8081" path="byEmail" doc:name="HTTP"/>
+        <set-variable doc:name="Set var companyName" value="'Dickenson'" variableName="companyName"/>
+        <flow-ref name="sfdc-to-canonical-flow" doc:name="Flow Reference"/>
+    </flow>
+       
+    <sub-flow name="sfdc-to-canonical-flow" doc:name="sfdc-to-canonical-flow">
+        <custom-transformer class="com.sungardas.esb.transformer.SfdcAccountQueryBuilder" doc:name="Custom Query Builder"/>
+        <!-- combine this demo with the cloud2api poc to get a REST call by email or by companyName -->
+        <!-- for now load the vars manually -->
+        <!-- invoke query builder -->
+        <!-- query: select Email, Account.Name from Contact where Email='rose@edge.com' -->
+        <sfdc:query config-ref="SalesforceSandBox" query="dsql:SELECT Email,FirstName,LastModifiedDate,LastName FROM Contact" doc:name="Query Salesforce"/>
+        <logger message="Verify payload type back from SFDC: #[payload.getClass()]" level="INFO" doc:name="Log Return Payload"/>
+        <!-- initiate empty list -->
+        <scripting:transformer doc:name="Init empty List">
+            <scripting:script engine="Groovy">
+            	<![CDATA[	message.setInvocationProperty('myList',[])
+							return payload]]>
+			</scripting:script>
+        </scripting:transformer>
+       
+		<foreach doc:name="For Each">
+			<logger message="verify original SFDC object type inside forEach: #[payload.getClass()]" level="INFO" doc:name="Verify"/>
+			<!-- first transformation: from java.util.HashMap to canonical Customer -->
+            <data-mapper:transform config-ref="sfdcContact_to_canonical_Customercontact" doc:name="sfdcContact-to-canonical-Customercontact"/>
+            <!-- <logger message="verify Canonical payload type: #[payload.getClass()]" level="INFO" doc:name="Verify Canonical payload type"/>
+            <logger message="CustomerContact firstName #[payload.firstName]" level="INFO" doc:name="get firstName"/>
+    		<logger message="CustomerContact lastName #[payload.lastName]" level="INFO" doc:name="get lastName"/>
+    		<logger message="CustomerContact email #[payload.email]" level="INFO" doc:name="get email"/> -->
+    		<!-- 2nd transformation: from Canonical.Customer to json (we only do this if need to be returned to the browser -->
+            <json:object-to-json-transformer mimeType="application/json" doc:name="Object to JSON"/>
+            <!-- build list iteratively -->
+            <scripting:transformer doc:name="build list">
+                <scripting:script engine="Groovy">
+                	<![CDATA[	tmp = message.getInvocationProperty('myList')
+								tmp.add(payload)
+								message.setInvocationProperty('myList', tmp)
+								return payload
+					]]>
+			</scripting:script>
+            </scripting:transformer>
+        </foreach>
+        <!-- <logger message="verify myList after ForEach: #[flowVars['myList']]" level="INFO" doc:name="Verify flowVar 'myList' after forEach"/> -->
+        <set-payload value="#[flowVars['myList']]" doc:name="Set Payload"/>
+        <json:object-to-json-transformer doc:name="Object to JSON"/>
+        <logger message="verify final payload: #[payload]" level="INFO" doc:name="Verify final payload"/>
+    </sub-flow>
+    
+</mule>
